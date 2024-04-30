@@ -3,8 +3,11 @@ import ansible_runner
 import shutil
 import os
 import datetime
+from datetime import date
+import json
 import psycopg2
 import logging
+import paramiko
 import subprocess
 
 CURR_PATH = os.getcwd()
@@ -12,6 +15,8 @@ tomcat_service_file = f"{CURR_PATH}/ansible/tomcat.service"
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+logging.getLogger("paramiko").setLevel(logging.ERROR)
+
 
 conn = psycopg2.connect(
     host="127.0.0.1",
@@ -90,6 +95,37 @@ def update_known_hosts():
     except Exception as e:
         logger.error(e)
         return str(e)
+    
+@app.route("/logs",methods=["POST"])
+def getLogs():
+    body = request.json
+    if not 'host' in body:
+        return "[host] is needed (IP Address of server).",400
+    if not 'password' in body:
+        return "[password] is needed of root user.",400
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(hostname=body['host'],username="root",password=body['password'])
+        curr = conn.cursor()
+        curr.execute("SELECT * from logs where host='%s' order by date_time desc"%(body['host']))
+        logs = curr.fetchall()
+        curr.close()
+        logs_json = []
+        for log in logs:
+            logs_json.append({
+                'id': log[0],
+                'host': log[1],
+                'date_time': log[2].isoformat(),
+                'log_file': log[3]
+            })
+        return json.dumps(logs_json)
+    except paramiko.AuthenticationException:
+        return "You are not authorized. Please check your credentials.",400
+    except Exception as e:
+        logger.error(e)
+        return "Internal Server Error.",500
+
 
 @app.route("/deploy", methods=["POST"])
 def deploy():
