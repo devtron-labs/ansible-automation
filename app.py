@@ -212,10 +212,6 @@ def deploy():
         )
 
         if r.status == "successful":
-            fileName = saveLogFileToS3(f"{curr_execution}/ansible.log",("%s-%s-ansible.log"%(body['host'],dateTime)))
-            if fileName == "":
-                return "Cannot save log to S3."
-            addEntryToDB(body["host"], dateTime, fileName)
             return "Completed Successfully"
 
         return "Process failed. Please see the logs to debug."
@@ -223,6 +219,8 @@ def deploy():
         logger.error(e)
         return "Internal Server Error", 500
     finally:
+        fileName = saveLogFileToS3(f"{curr_execution}/ansible.log",("%s-%s-ansible.log"%(body['host'],dateTime)))
+        addEntryToDB(body["host"], dateTime, fileName)
         shutil.rmtree(curr_execution)
 
 
