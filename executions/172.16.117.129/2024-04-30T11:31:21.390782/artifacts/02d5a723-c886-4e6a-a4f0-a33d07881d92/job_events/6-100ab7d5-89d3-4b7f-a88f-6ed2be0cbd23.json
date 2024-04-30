@@ -1,1 +1,0 @@
-{"event": "verbose", "uuid": "100ab7d5-89d3-4b7f-a88f-6ed2be0cbd23", "counter": 6, "stdout": "\u001b[0;34m  executable location = /home/iraunit/ansible/venv/bin/ansible-playbook\u001b[0m", "start_line": 5, "end_line": 6, "runner_ident": "02d5a723-c886-4e6a-a4f0-a33d07881d92", "created": "2024-04-30T06:01:22.064797"}

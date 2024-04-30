@@ -1,1 +1,0 @@
-{"event": "verbose", "uuid": "2157bd9d-d78d-4878-8091-14b84357667c", "counter": 2, "stdout": "\u001b[0;34m  config file = /home/iraunit/ansible/executions/172.16.117.129/2024-04-30T11:31:21.390782/ansible.cfg\u001b[0m", "start_line": 1, "end_line": 2, "runner_ident": "02d5a723-c886-4e6a-a4f0-a33d07881d92", "created": "2024-04-30T06:01:22.062698"}
