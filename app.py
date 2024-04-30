@@ -1,13 +1,15 @@
 from flask import Flask, request
+from botocore.client import Config
 import ansible_runner
 import shutil
+import boto3
 import os
 import datetime
-from datetime import date
 import json
 import psycopg2
 import logging
 import paramiko
+from werkzeug.utils import secure_filename
 import subprocess
 
 CURR_PATH = os.getcwd()
@@ -15,8 +17,6 @@ tomcat_service_file = f"{CURR_PATH}/ansible/tomcat.service"
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-logging.getLogger("paramiko").setLevel(logging.ERROR)
-
 
 conn = psycopg2.connect(
     host="127.0.0.1",
@@ -24,28 +24,51 @@ conn = psycopg2.connect(
     user=os.environ["DB_USERNAME"],
     password=os.environ["DB_PASSWORD"],
 )
+s3 = boto3.client("s3",aws_access_key_id=os.environ['AWS_ACCESS_KEY'].strip(),aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'].strip(),region_name=os.environ["AWS_REGION"],config=Config(signature_version='s3v4'))
 
 db = conn.cursor()
 
 try:
-    db.execute('CREATE TABLE IF NOT EXISTS logs (id serial PRIMARY KEY, host varchar (32)NOT NULL, date_time timestamptz NOT NULL, log_file varchar(512));')
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS logs (id serial PRIMARY KEY, host varchar (32)NOT NULL, date_time timestamptz NOT NULL, log_file_name varchar(512));"
+    )
     conn.commit()
 
 except Exception as e:
     logger.error(e)
-    
+
 app = Flask(__name__)
 
-def addEntryToDB(host,date_time,log_file_link):
+
+def addEntryToDB(host, date_time, log_file_link):
     try:
-        sql = "INSERT INTO logs(host, date_time, log_file) VALUES (%s, %s, %s)"
+        sql = "INSERT INTO logs(host, date_time, log_file_name) VALUES (%s, %s, %s)"
         db.execute(sql, (host, date_time, log_file_link))
         conn.commit()
     except Exception as e:
         logger.error(e)
 
-def addLogToS3(log_file_path):
-    pass
+
+def saveLogFileToS3(log_file_path,name,acl="authenticated-read"):
+    filename = secure_filename(name)
+    try:
+        with open(log_file_path, 'rb') as file:
+            s3.upload_fileobj(
+                file,
+                os.environ['AWS_BUCKET_NAME'].strip(),
+                filename,
+                ExtraArgs={
+                    "ACL": acl,
+                    "ContentType": 'text/plain'
+                }
+            )
+        return filename
+    except Exception as e:
+        logger.error(e)
+        return ""
+
+def getLogFileLink(fileName):
+    return s3.generate_presigned_url('get_object',Params={'Bucket': os.environ["AWS_BUCKET_NAME"].strip(), 'Key': fileName.strip()},ExpiresIn=3600)
 
 
 def getWarFileName(url):
@@ -83,52 +106,56 @@ def getNginxConf(hostname, warfile):
 def hello_world():
     return "Service is up and running."
 
-@app.route("/update-hosts",methods=["POST"])
+
+@app.route("/update-hosts", methods=["POST"])
 def update_known_hosts():
     try:
-        host = request.json['host']
+        host = request.json["host"]
         subprocess.run(["ssh-keygen", "-R", host], check=True)
         output = subprocess.check_output(["ssh-keyscan", "-t", "rsa", host])
-        with open(os.path.expanduser("~/.ssh/known_hosts"),"ab") as file:
+        with open(os.path.expanduser("~/.ssh/known_hosts"), "ab") as file:
             file.write(output)
         return "Host Updated Successfully"
     except Exception as e:
         logger.error(e)
         return str(e)
-    
-@app.route("/logs",methods=["POST"])
+
+
+@app.route("/logs", methods=["POST"])
 def getLogs():
     body = request.json
-    if not 'host' in body:
-        return "[host] is needed (IP Address of server).",400
-    if not 'password' in body:
-        return "[password] is needed of root user.",400
+    if not "host" in body:
+        return "[host] is needed (IP Address of server).", 400
+    if not "password" in body:
+        return "[password] is needed of root user.", 400
     try:
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(hostname=body['host'],username="root",password=body['password'])
+        client.connect(
+            hostname=body["host"], username="root", password=body["password"]
+        )
         curr = conn.cursor()
-        curr.execute("SELECT * from logs where host='%s' order by date_time desc"%(body['host']))
+        curr.execute(
+            "SELECT * from logs where host='%s' order by date_time desc"
+            % (body["host"])
+        )
         logs = curr.fetchall()
         curr.close()
         logs_json = []
         for log in logs:
-            logs_json.append({
-                'id': log[0],
-                'host': log[1],
-                'date_time': log[2].isoformat(),
-                'log_file': log[3]
-            })
+            logs_json.append({"Date-Time": datetime.datetime.fromisoformat(str(log[2])).strftime("%A, %d %B %Y %I:%M %p"), "Log File": getLogFileLink(log[3])})
         return json.dumps(logs_json)
     except paramiko.AuthenticationException:
-        return "You are not authorized. Please check your credentials.",400
+        return "You are not authorized. Please check your credentials.", 400
     except Exception as e:
         logger.error(e)
-        return "Internal Server Error.",500
+        return "Internal Server Error.", 500
 
 
 @app.route("/deploy", methods=["POST"])
 def deploy():
+    dateTime = str(datetime.datetime.now().isoformat())
+    curr_execution = ""
     try:
         body = request.json
         if not "host" in body:
@@ -138,7 +165,6 @@ def deploy():
         if not "war" in body:
             return "[war] is needed (War file to be deployed).", 400
 
-        dateTime = str(datetime.datetime.now().isoformat())
         curr_execution = f'{CURR_PATH}/executions/{body["host"]}/{dateTime}'
         os.makedirs(curr_execution)
 
@@ -186,14 +212,18 @@ def deploy():
         )
 
         if r.status == "successful":
-            addEntryToDB(body['host'],dateTime,"temp file link")
-            shutil.rmtree(curr_execution)
+            fileName = saveLogFileToS3(f"{curr_execution}/ansible.log",("%s-%s-ansible.log"%(body['host'],dateTime)))
+            if fileName == "":
+                return "Cannot save log to S3."
+            addEntryToDB(body["host"], dateTime, fileName)
             return "Completed Successfully"
 
         return "Process failed. Please see the logs to debug."
     except Exception as e:
         logger.error(e)
         return "Internal Server Error", 500
+    finally:
+        shutil.rmtree(curr_execution)
 
 
 if __name__ == "__main__":
