@@ -69,20 +69,20 @@
     - name: Download War file
       get_url:
         url: "{{war_file_link}}"
-        dest: "/tmp/{{war_file_name}}.war"
-      register: download_result
-
-    - name: Check if download was successful
-      debug:
-        msg: "Downloaded successfully."
-      when: download_result.changed
-
-    - name: Copy War file
-      copy:
-        remote_src: "/tmp/{{war_file_name}}.war"
-        dest: "/opt/{{ tomcat_version }}/webapps/{{war_file_name}}.war"
+        dest: "/opt/{{ tomcat_version }}/webapps/"
         mode: "0777"
-      when: download_result.changed
+
+    # - name: Check if download was successful
+    #   debug:
+    #     msg: "Downloaded successfully."
+    #   when: download_result.changed
+
+    # - name: Copy War file
+    #   copy:
+    #     remote_src: "/tmp/{{war_file_name}}.war"
+    #     dest: "/opt/{{ tomcat_version }}/webapps/{{war_file_name}}.war"
+    #     mode: "0777"
+    #   when: download_result.changed
 
     
     # - name: Delete the folder

@@ -5,6 +5,7 @@ import os
 import datetime
 import psycopg2
 import logging
+import subprocess
 
 CURR_PATH = os.getcwd()
 tomcat_service_file = f"{CURR_PATH}/ansible/tomcat.service"
@@ -77,6 +78,18 @@ def getNginxConf(hostname, warfile):
 def hello_world():
     return "Service is up and running."
 
+@app.route("/update-hosts",methods=["POST"])
+def update_known_hosts():
+    try:
+        host = request.json['host']
+        subprocess.run(["ssh-keygen", "-R", host], check=True)
+        output = subprocess.check_output(["ssh-keyscan", "-t", "rsa", host])
+        with open(os.path.expanduser("~/.ssh/known_hosts"),"ab") as file:
+            file.write(output)
+        return "Host Updated Successfully"
+    except Exception as e:
+        logger.error(e)
+        return str(e)
 
 @app.route("/deploy", methods=["POST"])
 def deploy():
@@ -127,17 +140,18 @@ def deploy():
         with open(f"{curr_execution}/ansible.log", "w") as file:
             pass
 
-        # r = ansible_runner.run(
-        #     private_data_dir=curr_execution,
-        #     playbook=f"{curr_execution}/deploy_war.yaml",
-        #     inventory=f"{curr_execution}/hosts.ini",
-        #     extravars=vars,
-        #     verbosity=2,
-        #     quiet=True,
-        # )
+        r = ansible_runner.run(
+            private_data_dir=curr_execution,
+            playbook=f"{curr_execution}/deploy_war.yaml",
+            inventory=f"{curr_execution}/hosts.ini",
+            extravars=vars,
+            verbosity=2,
+            quiet=True,
+        )
 
-        # if r.status == "successful":
+        if r.status == "successful":
             addEntryToDB(body['host'],dateTime,"temp file link")
+            shutil.rmtree(curr_execution)
             return "Completed Successfully"
 
         return "Process failed. Please see the logs to debug."
