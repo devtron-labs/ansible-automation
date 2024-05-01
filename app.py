@@ -40,6 +40,14 @@ except Exception as e:
 app = Flask(__name__)
 
 
+def searchInFile(file_path,search_string):
+    with open(file_path) as f:
+        datafile = f.readlines()
+    for line in datafile:
+        if search_string in line:
+            return True
+    return False
+
 def addEntryToDB(host, date_time, log_file_link):
     try:
         sql = "INSERT INTO logs(host, date_time, log_file_name) VALUES (%s, %s, %s)"
@@ -213,7 +221,12 @@ def deploy():
 
         if r.status == "successful":
             return "Completed Successfully"
-
+        if searchInFile(f"{curr_execution}/ansible.log","incorrect password"):
+                return "Invalid/incorrect password"
+        elif searchInFile(f"{curr_execution}/ansible.log","Invalid archive"):
+                return "Tomcat archive link expired. Please contact admin."
+        elif searchInFile(f"{curr_execution}/ansible.log","HTTP Error 404: Not Found"):
+                return "WAR file not found. HTTP Error"
         return "Process failed. Please see the logs to debug."
     except Exception as e:
         logger.error(e)

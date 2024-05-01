@@ -1,6 +1,5 @@
 - name: deploy war
   hosts: "{{host}}"
-  gather_facts: yes
   connection: ssh
   vars:
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
