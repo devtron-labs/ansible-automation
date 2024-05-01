@@ -9,6 +9,8 @@ import json
 import psycopg2
 import logging
 import paramiko
+import string
+import random
 from werkzeug.utils import secure_filename
 import subprocess
 
@@ -24,7 +26,13 @@ conn = psycopg2.connect(
     user=os.environ["DB_USERNAME"],
     password=os.environ["DB_PASSWORD"],
 )
-s3 = boto3.client("s3",aws_access_key_id=os.environ['AWS_ACCESS_KEY'].strip(),aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'].strip(),region_name=os.environ["AWS_REGION"],config=Config(signature_version='s3v4'))
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id=os.environ["AWS_ACCESS_KEY"].strip(),
+    aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"].strip(),
+    region_name=os.environ["AWS_REGION"],
+    config=Config(signature_version="s3v4"),
+)
 
 db = conn.cursor()
 
@@ -40,13 +48,18 @@ except Exception as e:
 app = Flask(__name__)
 
 
-def searchInFile(file_path,search_string):
+def getRandomString(N):
+    return "".join(random.choices(string.ascii_lowercase + string.digits, k=N))
+
+
+def searchInFile(file_path, search_string):
     with open(file_path) as f:
         datafile = f.readlines()
     for line in datafile:
         if search_string in line:
             return True
     return False
+
 
 def addEntryToDB(host, date_time, log_file_link):
     try:
@@ -57,26 +70,31 @@ def addEntryToDB(host, date_time, log_file_link):
         logger.error(e)
 
 
-def saveLogFileToS3(log_file_path,name,acl="authenticated-read"):
-    filename = secure_filename(name)
+def saveLogFileToS3(log_file_path, name, acl="authenticated-read"):
+    filename = secure_filename(getRandomString(6) + "-" + name)
     try:
-        with open(log_file_path, 'rb') as file:
+        with open(log_file_path, "rb") as file:
             s3.upload_fileobj(
                 file,
-                os.environ['AWS_BUCKET_NAME'].strip(),
+                os.environ["AWS_BUCKET_NAME"].strip(),
                 filename,
-                ExtraArgs={
-                    "ACL": acl,
-                    "ContentType": 'text/plain'
-                }
+                ExtraArgs={"ACL": acl, "ContentType": "text/plain"},
             )
         return filename
     except Exception as e:
         logger.error(e)
         return ""
 
+
 def getLogFileLink(fileName):
-    return s3.generate_presigned_url('get_object',Params={'Bucket': os.environ["AWS_BUCKET_NAME"].strip(), 'Key': fileName.strip()},ExpiresIn=3600)
+    return s3.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": os.environ["AWS_BUCKET_NAME"].strip(),
+            "Key": fileName.strip(),
+        },
+        ExpiresIn=3600,
+    )
 
 
 def getWarFileName(url):
@@ -151,7 +169,14 @@ def getLogs():
         curr.close()
         logs_json = []
         for log in logs:
-            logs_json.append({"Date-Time": datetime.datetime.fromisoformat(str(log[2])).strftime("%A, %d %B %Y %I:%M %p"), "Log File": getLogFileLink(log[3])})
+            logs_json.append(
+                {
+                    "Date-Time": datetime.datetime.fromisoformat(str(log[2])).strftime(
+                        "%A, %d %B %Y %I:%M %p"
+                    ),
+                    "Log File": getLogFileLink(log[3]),
+                }
+            )
         return json.dumps(logs_json)
     except paramiko.AuthenticationException:
         return "You are not authorized. Please check your credentials.", 400
@@ -173,7 +198,9 @@ def deploy():
         if not "war" in body:
             return "[war] is needed (War file to be deployed).", 400
 
-        curr_execution = f'{CURR_PATH}/executions/{body["host"]}/{dateTime}'
+        curr_execution = (
+            f'{CURR_PATH}/executions/{body["host"]}/{dateTime}-{getRandomString(6)}'
+        )
         os.makedirs(curr_execution)
 
         nginx_conf_file = f"{curr_execution}/nginx.conf"
@@ -221,18 +248,21 @@ def deploy():
 
         if r.status == "successful":
             return "Completed Successfully"
-        if searchInFile(f"{curr_execution}/ansible.log","incorrect password"):
-                return "Invalid/incorrect password"
-        elif searchInFile(f"{curr_execution}/ansible.log","Invalid archive"):
-                return "Tomcat archive link expired. Please contact admin."
-        elif searchInFile(f"{curr_execution}/ansible.log","HTTP Error 404: Not Found"):
-                return "WAR file not found. HTTP Error"
+        if searchInFile(f"{curr_execution}/ansible.log", "incorrect password"):
+            return "Invalid/incorrect password"
+        elif searchInFile(f"{curr_execution}/ansible.log", "Invalid archive"):
+            return "Tomcat archive link expired. Please contact admin."
+        elif searchInFile(f"{curr_execution}/ansible.log", "HTTP Error 404: Not Found"):
+            return "WAR file not found. HTTP Error"
         return "Process failed. Please see the logs to debug."
     except Exception as e:
         logger.error(e)
         return "Internal Server Error", 500
     finally:
-        fileName = saveLogFileToS3(f"{curr_execution}/ansible.log",("%s-%s-ansible.log"%(body['host'],dateTime)))
+        fileName = saveLogFileToS3(
+            f"{curr_execution}/ansible.log",
+            ("%s-%s-ansible.log" % (body["host"], dateTime)),
+        )
         addEntryToDB(body["host"], dateTime, fileName)
         shutil.rmtree(curr_execution)
 
